@@ -1,0 +1,148 @@
+version: "2"
+
+services:
+
+  db_irods:
+    image: postgres
+    hostname: $IRODS_DB_HOST
+    volumes:
+      - irods_database:/var/lib/postgresql/data
+      - $PWD/etc/pgs_init.sh:/docker-entrypoint-initdb.d/setup-my-schema.sh:ro
+    environment:
+      MY_DB: $IRODS_DB_NAME
+      MY_USER: $IRODS_DB_USER
+      MY_PASSWORD: $IRODS_DB_PASS
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: postgres
+    networks:
+      - internal
+    labels:
+      - "traefik.enable=false"
+
+  db_metalnx:
+    image: postgres
+    hostname: $METALNX_DB_HOST
+    volumes:
+      - metalnx_database:/var/lib/postgresql/data
+      - $PWD/etc/pgs_init.sh:/docker-entrypoint-initdb.d/setup-my-schema.sh:ro
+    environment:
+      MY_DB: $METALNX_DB_NAME
+      MY_USER: $METALNX_DB_USER
+      MY_PASSWORD: $METALNX_DB_PASS
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: postgres
+    networks:
+      - internal
+    labels:
+      - "traefik.enable=false"
+
+  irods:
+    build:
+      context: irods
+      dockerfile: Dockerfile
+      args:
+        IRODS_USER: $IRODS_USER
+        IRODS_SERVICE_PORT: $IRODS_SERVICE_PORT
+        IRODS_CONTROL_PORT: $IRODS_CONTROL_PORT
+        IRODS_RANGE_FROM: $IRODS_RANGE_FROM
+        IRODS_RANGE_TILL: $IRODS_RANGE_TILL
+    hostname: $IRODS_HOST
+    volumes:
+      - irods_config:/var/lib/irods
+      - $PWD/etc/ssl:/etc/irods/ssl
+    depends_on:
+      - db_irods
+    external_links:
+      - scz_ldap_1:ldap_host
+    networks:
+      - ldap
+      - internal
+    environment:
+      DATABASE_TYPE: "postgres"
+      IRODS_DB_HOST: $IRODS_DB_HOST
+      IRODS_DB_NAME: $IRODS_DB_NAME
+      IRODS_DB_PORT: $IRODS_DB_PORT
+      IRODS_DB_USER: $IRODS_DB_USER
+      IRODS_DB_PASS: $IRODS_DB_PASS
+      IRODS_SERVICE_PORT: $IRODS_SERVICE_PORT
+      IRODS_CONTROL_PORT: $IRODS_CONTROL_PORT
+      IRODS_RANGE_FROM: $IRODS_RANGE_FROM
+      IRODS_RANGE_TILL: $IRODS_RANGE_TILL
+      IRODS_HOST: $IRODS_HOST
+      IRODS_ZONE: $IRODS_ZONE
+      IRODS_USER: $IRODS_USER
+      IRODS_PASS: $IRODS_PASS
+      IRODS_SERVICE_NAME: $IRODS_SERVICE_NAME
+      IRODS_SERVICE_GROUP: $IRODS_SERVICE_GROUP
+      LDAP_HOST: $LDAP_HOST
+      LDAP_BASE_DN: $LDAP_BASE_DN
+      LDAP_BIND_DN: $LDAP_BIND_DN
+      LDAP_FILTER: $LDAP_FILTER
+      LDAP_PASS: $LDAP_PASS
+      PAM_OTP_UID: $PAM_OTP_UID
+      PAM_OTP_TTL: $PAM_OTP_TTL
+      PAM_OTP_DEBUG: $PAM_OTP_DEBUG
+    labels:
+      - "traefik.enable=false"
+
+  metalnx:
+    image: irods/metalnx:latest
+    volumes:
+      - $PWD/log:/usr/share/tomcat/logs/
+      - $PWD/etc/irods-ext:/etc/irods-ext
+      - $PWD/etc/ssl/irods.crt:/etc/ssl/irods.crt:ro
+    links:
+      - db_metalnx
+      - irods
+    networks:
+      - proxy
+      - internal
+    environment:
+      IRODS_HOST: $IRODS_HOST
+      IRODS_PORT: $IRODS_SERVICE_PORT
+      IRODS_ZONE: $IRODS_ZONE
+      IRODS_USER: $IRODS_USER
+      IRODS_PASS: $IRODS_PASS
+      IRODS_AUTH: $IRODS_AUTH
+      DB_HOST: $METALNX_DB_HOST
+      DB_PORT: $METALNX_DB_PORT
+      DB_NAME: $METALNX_DB_NAME
+      DB_USER: $METALNX_DB_USER
+      DB_PASS: $METALNX_DB_PASS
+    labels:
+      - "traefik.frontend.redirect.regex=^https?://metalnx.exp.scz.lab.surf.nl/?$$"
+      - "traefik.frontend.redirect.replacement=https://metalnx.exp.scz.lab.surf.nl/metalnx"
+      - "traefik.frontend.redirect.permanent=true"
+      - "traefik.frontend.rule=Host:metalnx.exp.scz.lab.surf.nl"
+      - "traefik.frontend.whiteList.sourceRange=$WHITELIST"
+      - "traefik.backend=metalnx"
+      - "traefik.docker.network=traefik_webgateway"
+      - "traefik.port=8080"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo 'Starting metalnx...'
+        keytool -import -trustcacerts -keystore /usr/lib/jvm/default-jvm/jre/lib/security/cacerts -storepass changeit -noprompt -alias mycert -file /etc/ssl/irods.crt
+        apk add libintl gettext
+        /usr/bin/envsubst </etc/irods-ext/metalnx.properties.env >/etc/irods-ext/metalnx.properties
+        cat /etc/irods-ext/metalnx.properties
+        catalina.sh run
+
+volumes:
+  irods_database:
+    driver: local
+  metalnx_database:
+    driver: local
+  irods_config:
+    driver: local
+
+networks:
+  proxy:
+    external:
+      name: traefik_webgateway
+  ldap:
+    external:
+      name: scz_internal
+  internal:
+    external: false
